@@ -1,0 +1,264 @@
+﻿@page "/"
+@using ImageTextExtractor.Services
+@inject ImageProcessingService ImageProcessor
+@inject IJSRuntime JSRuntime
+
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h3>Image Text Extractor</h3>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Upload Image</label>
+                        <div class="input-group">
+                            <InputFile OnChange="OnFileSelected" class="form-control" accept="image/*" />
+                            <button class="btn btn-danger" @onclick="ClearSelection" disabled="@(!hasImageSelected)">
+                                <i class="bi bi-x-circle-fill"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        @if (!isWebcamActive)
+                        {
+                            <button class="btn btn-primary" @onclick="StartWebcam">
+                                <i class="bi bi-camera-video"></i> Start Webcam
+                            </button>
+                        }
+                        else
+                        {
+                            <div class="btn-group">
+                                <button class="btn btn-secondary" @onclick="CaptureImage">
+                                    <i class="bi bi-camera"></i> Capture Image
+                                </button>
+                                <button class="btn btn-danger" @onclick="StopWebcam">
+                                    <i class="bi bi-camera-video-off"></i> Stop Webcam
+                                </button>
+                            </div>
+                        }
+                    </div>
+                    <div class="mb-3">
+                        <div class="position-relative">
+                            <video id="webcam" class="img-fluid rounded" style="width: 100%; display: none;"></video>
+                            <canvas id="canvas" style="display: none;"></canvas>
+                            @if (isCapturing)
+                            {
+                                <div class="position-absolute top-50 start-50 translate-middle">
+                                    <div class="spinner-border text-light" role="status">
+                                        <span class="visually-hidden">Capturing...</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h3>Extracted Text</h3>
+                </div>
+                <div class="card-body">
+                    @if (isProcessing)
+                    {
+                        <div class="processing-status">
+                            <div class="progress mb-3">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                     role="progressbar" 
+                                     style="width: @progressPercentage%"
+                                     aria-valuenow="@progressPercentage" 
+                                     aria-valuemin="0" 
+                                     aria-valuemax="100">
+                                    @progressPercentage%
+                                </div>
+                            </div>
+                            <p class="text-center mb-3">@progressStatus</p>
+                            <div class="text-center">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <div class="alert alert-danger">
+                            @errorMessage
+                        </div>
+                    }
+                    else if (!string.IsNullOrEmpty(extractedText))
+                    {
+                        <div class="mb-3">
+                            <textarea class="form-control" rows="10" readonly>@extractedText</textarea>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-success" @onclick="DownloadText">
+                                <i class="bi bi-download"></i> Download Text
+                            </button>
+                            <button class="btn btn-danger" @onclick="ClearSelection">
+                                <i class="bi bi-x-circle-fill"></i> Clear
+                            </button>
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="text-muted">No text extracted yet. Please upload an image or capture one from webcam.</p>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string extractedText = string.Empty;
+    private string errorMessage = string.Empty;
+    private bool isProcessing;
+    private int progressPercentage;
+    private string progressStatus = string.Empty;
+    private bool isWebcamActive;
+    private bool isCapturing;
+    private bool hasImageSelected;
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file != null)
+        {
+            try
+            {
+                hasImageSelected = true;
+                isProcessing = true;
+                errorMessage = string.Empty;
+                progressPercentage = 0;
+                progressStatus = "Starting...";
+                StateHasChanged();
+
+                var progress = new Progress<(int Percentage, string Status)>(update =>
+                {
+                    progressPercentage = update.Percentage;
+                    progressStatus = update.Status;
+                    StateHasChanged();
+                });
+
+                var result = await ImageProcessor.ExtractTextFromImage(file, progress);
+                extractedText = result.Text;
+            }
+            catch (Exception ex)
+            {
+                errorMessage = ex.Message;
+                extractedText = string.Empty;
+            }
+            finally
+            {
+                isProcessing = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task StartWebcam()
+    {
+        try
+        {
+            errorMessage = string.Empty;
+            await JSRuntime.InvokeVoidAsync("startWebcam");
+            isWebcamActive = true;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Error accessing webcam: " + ex.Message;
+            isWebcamActive = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task CaptureImage()
+    {
+        try
+        {
+            isCapturing = true;
+            errorMessage = string.Empty;
+            StateHasChanged();
+
+            await JSRuntime.InvokeVoidAsync("captureImage");
+            hasImageSelected = true;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Error capturing image: " + ex.Message;
+        }
+        finally
+        {
+            isCapturing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task StopWebcam()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("stopWebcam");
+            isWebcamActive = false;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Error stopping webcam: " + ex.Message;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DownloadText()
+    {
+        if (!string.IsNullOrEmpty(extractedText))
+        {
+            try
+            {
+                var bytes = System.Text.Encoding.UTF8.GetBytes(extractedText);
+                var base64 = Convert.ToBase64String(bytes);
+                await JSRuntime.InvokeVoidAsync("downloadText", "extracted_text.txt", base64);
+            }
+            catch (Exception ex)
+            {
+                errorMessage = "Error downloading text: " + ex.Message;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task ClearSelection()
+    {
+        try
+        {
+            // Clear the file input
+            await JSRuntime.InvokeVoidAsync("clearFileInput");
+            
+            // Reset all states
+            extractedText = string.Empty;
+            errorMessage = string.Empty;
+            isProcessing = false;
+            progressPercentage = 0;
+            progressStatus = string.Empty;
+            hasImageSelected = false;
+            
+            // Stop webcam if active
+            if (isWebcamActive)
+            {
+                await StopWebcam();
+            }
+            
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Error clearing selection: " + ex.Message;
+            StateHasChanged();
+        }
+    }
+}
